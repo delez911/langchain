@@ -28,14 +28,16 @@ You can run `streamlit hello` to load a sample app and validate your install suc
 To create a `StreamlitCallbackHandler`, you just need to provide a parent container to render the output.
 
 ```python
-from langchain_community.callbacks import StreamlitCallbackHandler
+from langchain_community.callbacks.streamlit import (
+    StreamlitCallbackHandler,
+)
 import streamlit as st
 
 st_callback = StreamlitCallbackHandler(st.container())
 ```
 
 Additional keyword arguments to customize the display behavior are described in the
-[API reference](https://api.python.langchain.com/en/latest/callbacks/langchain.callbacks.streamlit.streamlit_callback_handler.StreamlitCallbackHandler.html).
+[API reference](https://python.langchain.com/api_reference/langchain/callbacks/langchain.callbacks.streamlit.streamlit_callback_handler.StreamlitCallbackHandler.html).
 
 ### Scenario 1: Using an Agent with Tools
 
@@ -47,7 +49,6 @@ thoughts and actions live in your app.
 import streamlit as st
 from langchain import hub
 from langchain.agents import AgentExecutor, create_react_agent, load_tools
-from langchain_community.callbacks import StreamlitCallbackHandler
 from langchain_openai import OpenAI
 
 llm = OpenAI(temperature=0, streaming=True)

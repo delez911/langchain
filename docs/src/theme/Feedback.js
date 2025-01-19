@@ -1,6 +1,8 @@
 /* eslint-disable no-return-assign, react/jsx-props-no-spreading */
 import React, { useState, useEffect } from "react";
-import gtag from "../analytics";
+import { createClient } from "@supabase/supabase-js";
+import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
+import { v4 as uuidv4 } from "uuid";
 
 const useCookie = () => {
   /**
@@ -90,33 +92,99 @@ function SvgThumbsDown() {
   );
 }
 
+/**
+ * Generated type for the Supabase DB schema.
+ * @typedef {import('../supabase').Database} Database
+ */
+
 const FEEDBACK_COOKIE_PREFIX = "feedbackSent";
+/** @type {Database["public"]["Enums"]["project_type"]} */
+const LANGCHAIN_PROJECT_NAME = "langchain_py_docs";
+
+/**
+ * @returns {Promise<string>}
+ */
+const getIpAddress = async () => {
+  const response = await fetch("https://api.ipify.org?format=json");
+  return (await response.json()).ip;
+};
 
 export default function Feedback() {
   const { setCookie, checkCookie } = useCookie();
+  const [feedbackId, setFeedbackId] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [feedbackDetailsSent, setFeedbackDetailsSent] = useState(false);
+  const { siteConfig } = useDocusaurusContext();
+  const [pathname, setPathname] = useState("");
 
-  /**
-   * @param {"yes" | "no"} feedback
-   */
-  const handleFeedback = (feedback) => {
+  /** @param {"good" | "bad"} feedback */
+  const handleFeedback = async (feedback) => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("Feedback (dev)");
+      return;
+    }
+
     const cookieName = `${FEEDBACK_COOKIE_PREFIX}_${window.location.pathname}`;
     if (checkCookie(cookieName)) {
       return;
     }
 
-    const feedbackType =
-      process.env.NODE_ENV === "production"
-        ? "page_feedback"
-        : "page_feedback_dev";
+    /** @type {Database} */
+    const supabase = createClient(
+      siteConfig.customFields.supabaseUrl,
+      siteConfig.customFields.supabasePublicKey
+    );
+    try {
+      const ipAddress = await getIpAddress();
+      const rowId = uuidv4();
+      setFeedbackId(rowId);
+      const params = {
+        id: rowId,
+        is_good: feedback === "good",
+        url: window.location.pathname,
+        user_ip: ipAddress,
+        project: LANGCHAIN_PROJECT_NAME,
+      };
 
-    gtag("event", feedbackType, {
-      url: window.location.pathname,
-      feedback,
-    });
+      const { error } = await supabase.from("feedback").insert(params);
+      if (error) {
+        throw error;
+      }
+    } catch (e) {
+      console.error("Failed to send feedback", e);
+      return;
+    }
+
     // Set a cookie to prevent feedback from being sent multiple times
     setCookie(cookieName, window.location.pathname, 1);
     setFeedbackSent(true);
+  };
+
+  const handleFeedbackDetails = async (e) => {
+    e.preventDefault();
+    if (!feedbackId) {
+      setFeedbackDetailsSent(true);
+      return;
+    }
+    const details = e.target.elements
+      .namedItem("details")
+      ?.value.slice(0, 1024);
+    if (!details) {
+      return;
+    }
+    const supabase = createClient(
+      siteConfig.customFields.supabaseUrl,
+      siteConfig.customFields.supabasePublicKey
+    );
+    const { error } = await supabase.from("feedback_details").insert({
+      feedback_id: feedbackId,
+      details,
+    });
+    if (error) {
+      console.error("Failed to add feedback details", error);
+      return;
+    }
+    setFeedbackDetailsSent(true);
   };
 
   useEffect(() => {
@@ -126,6 +194,7 @@ export default function Feedback() {
       // (cookies exp in 24hrs)
       const cookieName = `${FEEDBACK_COOKIE_PREFIX}_${window.location.pathname}`;
       setFeedbackSent(checkCookie(cookieName));
+      setPathname(window.location.pathname);
     }
   }, []);
 
@@ -155,25 +224,49 @@ export default function Feedback() {
     <div style={{ display: "flex", flexDirection: "column" }}>
       <hr />
       {feedbackSent ? (
-        <h4>Thanks for your feedback!</h4>
+        <>
+          <h4>Thanks for your feedback!</h4>
+          {!feedbackDetailsSent && feedbackId && (
+            <form
+              style={{ display: "flex", flexDirection: "column" }}
+              onSubmit={handleFeedbackDetails}
+            >
+              <h4>Do you have any specific comments?</h4>
+              <textarea
+                name="details"
+                style={{ width: "480px", height: "120px" }}
+              />
+              <button
+                style={{
+                  width: "72px",
+                  marginLeft: "408px",
+                  marginTop: "12px",
+                }}
+                type="submit"
+              >
+                Submit
+              </button>
+            </form>
+          )}
+        </>
       ) : (
         <>
-          <h4>Help us out by providing feedback on this documentation page:</h4>
+          <h4>Was this page helpful?</h4>
           <div style={{ display: "flex", gap: "5px" }}>
             <div
               {...defaultFields}
               role="button" // Make it recognized as an interactive element
               tabIndex={0} // Make it focusable
-              onKeyDown={(e) => {
+              onKeyDown={async (e) => {
                 // Handle keyboard interaction
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  handleFeedback("yes");
+                  await handleFeedback("good");
                 }
               }}
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.preventDefault();
-                handleFeedback("yes");
+                await handleFeedback("good");
               }}
             >
               <SvgThumbsUp />
@@ -182,16 +275,16 @@ export default function Feedback() {
               {...defaultFields}
               role="button" // Make it recognized as an interactive element
               tabIndex={0} // Make it focusable
-              onKeyDown={(e) => {
+              onKeyDown={async (e) => {
                 // Handle keyboard interaction
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  handleFeedback("no");
+                  await handleFeedback("bad");
                 }
               }}
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.preventDefault();
-                handleFeedback("no");
+                await handleFeedback("bad");
               }}
             >
               <SvgThumbsDown />

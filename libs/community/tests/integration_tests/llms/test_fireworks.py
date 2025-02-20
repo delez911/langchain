@@ -1,4 +1,5 @@
 """Test Fireworks AI API Wrapper."""
+
 from typing import Generator
 
 import pytest
@@ -15,7 +16,7 @@ def llm() -> Fireworks:
 @pytest.mark.scheduled
 def test_fireworks_call(llm: Fireworks) -> None:
     """Test valid call to fireworks."""
-    output = llm("How is the weather in New York today?")
+    output = llm.invoke("How is the weather in New York today?")
     assert isinstance(output, str)
 
 
@@ -130,7 +131,10 @@ async def test_fireworks_async_agenerate(llm: Fireworks) -> None:
 @pytest.mark.scheduled
 async def test_fireworks_multiple_prompts_async_agenerate(llm: Fireworks) -> None:
     output = await llm.agenerate(
-        ["How is the weather in New York today?", "I'm pickle rick"]
+        [
+            "How is the weather in New York today?",
+            "I'm pickle rick",
+        ]
     )
     assert isinstance(output, LLMResult)
     assert isinstance(output.generations, list)

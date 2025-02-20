@@ -1,4 +1,5 @@
 """Integration test for JIRA API Wrapper."""
+
 import json
 from datetime import datetime
 
@@ -78,7 +79,11 @@ def test_task_related(clickup_wrapper: ClickupAPIWrapper) -> None:
     clickup_wrapper.run(
         mode="update_task",
         query=json.dumps(
-            {"task_id": task_id, "attribute_name": "name", "value": new_name}
+            {
+                "task_id": task_id,
+                "attribute_name": "name",
+                "value": new_name,
+            }
         ),
     )
 

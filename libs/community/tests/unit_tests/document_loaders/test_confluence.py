@@ -1,5 +1,5 @@
 import unittest
-from typing import Dict
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,10 +20,10 @@ def mock_confluence():  # type: ignore
 
 @pytest.mark.requires("atlassian", "bs4", "lxml")
 class TestConfluenceLoader:
-    CONFLUENCE_URL = "https://example.atlassian.com/wiki"
-    MOCK_USERNAME = "user@gmail.com"
-    MOCK_API_TOKEN = "api_token"
-    MOCK_SPACE_KEY = "spaceId123"
+    CONFLUENCE_URL: str = "https://example.atlassian.com/wiki"
+    MOCK_USERNAME: str = "user@gmail.com"
+    MOCK_API_TOKEN: str = "api_token"
+    MOCK_SPACE_KEY: str = "spaceId123"
 
     def test_confluence_loader_initialization(self, mock_confluence: MagicMock) -> None:
         ConfluenceLoader(
@@ -68,6 +68,16 @@ class TestConfluenceLoader:
                 session=requests.Session(),
             )
 
+        with pytest.raises(ValueError):
+            ConfluenceLoader(
+                self.CONFLUENCE_URL,
+                username=self.MOCK_USERNAME,
+                api_key=self.MOCK_API_TOKEN,
+                cookies={
+                    "key": "value",
+                },
+            )
+
     def test_confluence_loader_initialization_from_env(
         self, mock_confluence: MagicMock
     ) -> None:
@@ -108,10 +118,12 @@ class TestConfluenceLoader:
             self._get_mock_page_restrictions("456"),
         ]
 
-        confluence_loader = self._get_mock_confluence_loader(mock_confluence)
-
         mock_page_ids = ["123", "456"]
-        documents = confluence_loader.load(page_ids=mock_page_ids)
+        confluence_loader = self._get_mock_confluence_loader(
+            mock_confluence, page_ids=mock_page_ids
+        )
+
+        documents = list(confluence_loader.lazy_load())
 
         assert mock_confluence.get_page_by_id.call_count == 2
         assert mock_confluence.get_all_restrictions_for_content.call_count == 2
@@ -139,9 +151,11 @@ class TestConfluenceLoader:
             self._get_mock_page_restrictions("456"),
         ]
 
-        confluence_loader = self._get_mock_confluence_loader(mock_confluence)
+        confluence_loader = self._get_mock_confluence_loader(
+            mock_confluence, space_key=self.MOCK_SPACE_KEY, max_pages=2
+        )
 
-        documents = confluence_loader.load(space_key=self.MOCK_SPACE_KEY, max_pages=2)
+        documents = confluence_loader.load()
 
         assert mock_confluence.get_all_pages_from_space.call_count == 1
 
@@ -155,6 +169,7 @@ class TestConfluenceLoader:
         assert mock_confluence.cql.call_count == 0
         assert mock_confluence.get_page_child_by_type.call_count == 0
 
+    @pytest.mark.requires("markdownify")
     def test_confluence_loader_when_content_format_and_keep_markdown_format_enabled(
         self, mock_confluence: MagicMock
     ) -> None:
@@ -168,14 +183,15 @@ class TestConfluenceLoader:
             self._get_mock_page_restrictions("456"),
         ]
 
-        confluence_loader = self._get_mock_confluence_loader(mock_confluence)
-
-        documents = confluence_loader.load(
+        confluence_loader = self._get_mock_confluence_loader(
+            mock_confluence,
             space_key=self.MOCK_SPACE_KEY,
             content_format=ContentFormat.VIEW,
             keep_markdown_format=True,
             max_pages=2,
         )
+
+        documents = confluence_loader.load()
 
         assert mock_confluence.get_all_pages_from_space.call_count == 1
 
@@ -189,19 +205,53 @@ class TestConfluenceLoader:
         assert mock_confluence.cql.call_count == 0
         assert mock_confluence.get_page_child_by_type.call_count == 0
 
-    def _get_mock_confluence_loader(
+    @pytest.mark.requires("markdownify")
+    def test_confluence_loader_when_include_lables_set_to_true(
         self, mock_confluence: MagicMock
+    ) -> None:
+        # one response with two pages
+        mock_confluence.get_all_pages_from_space.return_value = [
+            self._get_mock_page("123", include_labels=True),
+            self._get_mock_page("456", include_labels=False),
+        ]
+        mock_confluence.get_all_restrictions_for_content.side_effect = [
+            self._get_mock_page_restrictions("123"),
+            self._get_mock_page_restrictions("456"),
+        ]
+
+        conflence_loader = self._get_mock_confluence_loader(
+            mock_confluence,
+            space_key=self.MOCK_SPACE_KEY,
+            include_labels=True,
+            max_pages=2,
+        )
+
+        documents = conflence_loader.load()
+
+        assert mock_confluence.get_all_pages_from_space.call_count == 1
+
+        assert len(documents) == 2
+        assert all(isinstance(doc, Document) for doc in documents)
+        assert documents[0].metadata["labels"] == ["l1", "l2"]
+        assert documents[1].metadata["labels"] == []
+
+    def _get_mock_confluence_loader(
+        self, mock_confluence: MagicMock, **kwargs: Any
     ) -> ConfluenceLoader:
         confluence_loader = ConfluenceLoader(
             self.CONFLUENCE_URL,
             username=self.MOCK_USERNAME,
             api_key=self.MOCK_API_TOKEN,
+            **kwargs,
         )
         confluence_loader.confluence = mock_confluence
         return confluence_loader
 
     def _get_mock_page(
-        self, page_id: str, content_format: ContentFormat = ContentFormat.STORAGE
+        self,
+        page_id: str,
+        content_format: ContentFormat = ContentFormat.STORAGE,
+        include_labels: bool = False,
     ) -> Dict:
         return {
             "id": f"{page_id}",
@@ -209,6 +259,20 @@ class TestConfluenceLoader:
             "body": {
                 f"{content_format.name.lower()}": {"value": f"<p>Content {page_id}</p>"}
             },
+            **(
+                {
+                    "metadata": {
+                        "labels": {
+                            "results": [
+                                {"prefix": "global", "name": "l1", "id": "111"},
+                                {"prefix": "global", "name": "l2", "id": "222"},
+                            ]
+                        }
+                    }
+                    if include_labels
+                    else {},
+                }
+            ),
             "status": "current",
             "type": "page",
             "_links": {

@@ -3,14 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from langchain_core._api.deprecation import deprecated
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models.llms import LLM
 from langchain_core.load.serializable import Serializable
-from langchain_core.pydantic_v1 import Extra, Field, SecretStr, root_validator
-from langchain_core.utils import convert_to_secret_str, get_from_dict_or_env
+from langchain_core.utils import convert_to_secret_str, get_from_dict_or_env, pre_init
+from pydantic import ConfigDict, Field, SecretStr
 from tenacity import (
     before_sleep_log,
     retry,
@@ -24,8 +25,15 @@ from langchain_community.llms.utils import enforce_stop_tokens
 logger = logging.getLogger(__name__)
 
 
-def _create_retry_decorator(llm: Cohere) -> Callable[[Any], Any]:
+def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
     import cohere
+
+    # support v4 and v5
+    retry_conditions = (
+        retry_if_exception_type(cohere.error.CohereError)
+        if hasattr(cohere, "error")
+        else retry_if_exception_type(Exception)
+    )
 
     min_seconds = 4
     max_seconds = 10
@@ -33,16 +41,16 @@ def _create_retry_decorator(llm: Cohere) -> Callable[[Any], Any]:
     # 4 seconds, then up to 10 seconds, then 10 seconds afterwards
     return retry(
         reraise=True,
-        stop=stop_after_attempt(llm.max_retries),
+        stop=stop_after_attempt(max_retries),
         wait=wait_exponential(multiplier=1, min=min_seconds, max=max_seconds),
-        retry=(retry_if_exception_type(cohere.error.CohereError)),
+        retry=retry_conditions,
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
 
 
 def completion_with_retry(llm: Cohere, **kwargs: Any) -> Any:
     """Use tenacity to retry the completion call."""
-    retry_decorator = _create_retry_decorator(llm)
+    retry_decorator = _create_retry_decorator(llm.max_retries)
 
     @retry_decorator
     def _completion_with_retry(**kwargs: Any) -> Any:
@@ -53,7 +61,7 @@ def completion_with_retry(llm: Cohere, **kwargs: Any) -> Any:
 
 def acompletion_with_retry(llm: Cohere, **kwargs: Any) -> Any:
     """Use tenacity to retry the completion call."""
-    retry_decorator = _create_retry_decorator(llm)
+    retry_decorator = _create_retry_decorator(llm.max_retries)
 
     @retry_decorator
     async def _completion_with_retry(**kwargs: Any) -> Any:
@@ -62,11 +70,14 @@ def acompletion_with_retry(llm: Cohere, **kwargs: Any) -> Any:
     return _completion_with_retry(**kwargs)
 
 
+@deprecated(
+    since="0.0.30", removal="1.0", alternative_import="langchain_cohere.BaseCohere"
+)
 class BaseCohere(Serializable):
     """Base class for Cohere models."""
 
-    client: Any  #: :meta private:
-    async_client: Any  #: :meta private:
+    client: Any = None  #: :meta private:
+    async_client: Any = None  #: :meta private:
     model: Optional[str] = Field(default=None)
     """Model name to use."""
 
@@ -84,7 +95,7 @@ class BaseCohere(Serializable):
     user_agent: str = "langchain"
     """Identifier for the application making the request."""
 
-    @root_validator()
+    @pre_init
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate that api key and python package exists in environment."""
         try:
@@ -110,6 +121,7 @@ class BaseCohere(Serializable):
         return values
 
 
+@deprecated(since="0.1.14", removal="1.0", alternative_import="langchain_cohere.Cohere")
 class Cohere(LLM, BaseCohere):
     """Cohere large language models.
 
@@ -147,10 +159,9 @@ class Cohere(LLM, BaseCohere):
     max_retries: int = 10
     """Maximum number of retries to make when generating."""
 
-    class Config:
-        """Configuration for this pydantic object."""
-
-        extra = Extra.forbid
+    model_config = ConfigDict(
+        extra="forbid",
+    )
 
     @property
     def _default_params(self) -> Dict[str, Any]:
